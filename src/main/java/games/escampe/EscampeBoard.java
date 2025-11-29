@@ -38,6 +38,22 @@ public class EscampeBoard implements Partie1, IBoard<EscampeMove,EscampeRole,Esc
         precomputePaths();
     }
 
+    // ------------ Constructeurs ------------
+
+    public EscampeBoard() {
+        // Constructeur par défaut
+    }
+
+    // Constructeur de copie
+    public EscampeBoard(EscampeBoard board) {
+        this.whitePaladins = board.whitePaladins;
+        this.blackPaladins = board.blackPaladins;
+        this.whiteUnicorn = board.whiteUnicorn;
+        this.blackUnicorn = board.blackUnicorn;
+        this.currentTurn = board.currentTurn;
+        this.nextMoveConstraint = board.nextMoveConstraint;
+    }
+
     // ------------ Outils de conversion ------------
 
     /** Convertit une portion de chaîne (ex: "A1" dans "A1-B2") en index entier.
@@ -234,8 +250,7 @@ public class EscampeBoard implements Partie1, IBoard<EscampeMove,EscampeRole,Esc
     }
 
     /** Vérifie si le coup de jeu est valide
-     * @param from l'index de la case de départ
-     * @param to l'index de la case d'arrivée
+     * @param move le coup à jouer, sous la forme "A1-B2"
      * @param player le joueur qui joue, représenté par "noir" ou "blanc".
      * @return vrai si le coup est valide
      */
@@ -327,55 +342,76 @@ public class EscampeBoard implements Partie1, IBoard<EscampeMove,EscampeRole,Esc
      * @param player le joueur qui joue, représenté par "noir" ou "blanc".
      */
     @Override
-    public EscampeBoard play(EscampeMove move, EscampeRole player) { //string avant
-        // Créer une copie du plateau courant
-        EscampeBoard copy = new EscampeBoard();
-        copy.whitePaladins = this.whitePaladins;
-        copy.whiteUnicorn = this.whiteUnicorn;
-        copy.blackPaladins = this.blackPaladins;
-        copy.blackUnicorn = this.blackUnicorn;
-        copy.currentTurn = this.currentTurn;
-        copy.nextMoveConstraint = this.nextMoveConstraint;
+    public EscampeBoard play(EscampeMove move, EscampeRole player) {
+        EscampeBoard nextBoard = new EscampeBoard(this); // Créer une copie du plateau actif
+        nextBoard.playVoid(move, player); // Appliquer le coup sur la copie (en void pour l'optimisation)
+        return nextBoard;
+    }
 
+    // TODO : La méthode playVoid est optimisée donc essayer de l'utiliser au lieu de play
+
+    /** Modifie le plateau courant en jouant le coup move avec la pièce choisie
+     * Variante optimisée qui modifie le plateau courant au lieu de créer une copie.
+     * @param move le coup à jouer, sous la forme "C1-D1" ou "C6/A6/B5/D5/E6/F5"
+     * @param player le joueur qui joue, représenté par "noir" ou "blanc".
+     */
+    public void playVoid(EscampeMove move, EscampeRole player) {
+        // Si le joueur passe son tour ("E")
+        if(move.isPass()){
+            this.nextMoveConstraint = 0; // Mouvement libre
+            this.switchTurn();
+            return;
+        }
+
+        // Si placement initial (ex : "C6/A6/B5/D5/E6/F5")
         if (move.isPlacement()) {
-            // Placement initial : indices de la licorne et paladins
             int[] indices = move.getPlacementIndices();
             if (player == EscampeRole.WHITE) {
-                copy.whiteUnicorn |= 1L << indices[0]; // Licorne
-                for (int i = 1; i < 6; i++) copy.whitePaladins |= 1L << indices[i];
+                this.whiteUnicorn |= 1L << indices[0]; // Licorne
+                for (int i = 1; i < 6; i++) this.whitePaladins |= 1L << indices[i];
             } else {
-                copy.blackUnicorn |= 1L << indices[0]; // Licorne
-                for (int i = 1; i < 6; i++) copy.blackPaladins |= 1L << indices[i];
+                this.blackUnicorn |= 1L << indices[0]; // Licorne
+                for (int i = 1; i < 6; i++) this.blackPaladins |= 1L << indices[i];
+            }
+
+            this.nextMoveConstraint = 0; // Pas de contrainte après placement
+            this.switchTurn();
+            return;
+        }
+
+        // Si déplacement normal (ex : "A1-B2")
+        int from = move.getFromIndex();
+        int to   = move.getToIndex();
+        long fromMask = 1L << from;
+        long toMask   = 1L << to;
+        boolean isWhite = (player == EscampeRole.WHITE);
+
+        // Capture de licorne (on peut retirer n'importe quelle pièce adverse sur la case d'arrivée car validée dans isValidMove)
+        if(isWhite){
+            this.blackUnicorn &= ~toMask;
+            this.blackPaladins &= ~toMask;
+        } else {
+            this.whiteUnicorn &= ~toMask;
+            this.whitePaladins &= ~toMask;
+        }
+
+        // Déplacement de la pièce
+        if (isWhite) {
+            if ((this.whiteUnicorn & fromMask) != 0) { // Déplacer la licorne
+                this.whiteUnicorn ^= (fromMask | toMask); // Utilisation de XOR pour déplacer
+            } else { // Déplacer un paladin
+                this.whitePaladins ^= (fromMask | toMask);
             }
         } else {
-            // Déplacement classique : A1-B2
-            int from = move.getFromIndex();
-            int to   = move.getToIndex();
-            long fromMask = 1L << from;
-            long toMask   = 1L << to;
-
-            if (player == EscampeRole.WHITE) {
-                if ((copy.whiteUnicorn & fromMask) != 0) {
-                    copy.whiteUnicorn &= ~fromMask;
-                    copy.whiteUnicorn |= toMask;
-                } else {
-                    copy.whitePaladins &= ~fromMask;
-                    copy.whitePaladins |= toMask;
-                }
-            } else {
-                if ((copy.blackUnicorn & fromMask) != 0) {
-                    copy.blackUnicorn &= ~fromMask;
-                    copy.blackUnicorn |= toMask;
-                } else {
-                    copy.blackPaladins &= ~fromMask;
-                    copy.blackPaladins |= toMask;
-                }
+            if ((this.blackUnicorn & fromMask) != 0) { // Déplacer la licorne
+                this.blackUnicorn ^= (fromMask | toMask);
+            } else { // Déplacer un paladin
+                this.blackPaladins ^= (fromMask | toMask);
             }
         }
 
-        // Changer le joueur courant
-        copy.currentTurn = (player == EscampeRole.WHITE) ? EscampeRole.BLACK : EscampeRole.WHITE;
-        return copy;
+        this.nextMoveConstraint = getLisereType(to); // Met à jour la contrainte pour le prochain coup
+        this.switchTurn();
     }
 
     /** Vrai lorsque le plateau correspond à une fin de partie.
@@ -405,6 +441,12 @@ public class EscampeBoard implements Partie1, IBoard<EscampeMove,EscampeRole,Esc
         if((LISERE_2 & mask) != 0) return 2;
         if((LISERE_3 & mask) != 0) return 3;
         return 0; // Si erreur
+    }
+
+    /** Change le joueur courant
+     */
+    private void switchTurn() {
+        this.currentTurn = (this.currentTurn == EscampeRole.WHITE) ? EscampeRole.BLACK : EscampeRole.WHITE;
     }
 
     /** Pré-calcul des chemins entre chaque paire de cases pour chaque type de liseré

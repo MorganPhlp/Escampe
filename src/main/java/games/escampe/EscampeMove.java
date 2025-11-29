@@ -12,14 +12,20 @@ public class EscampeMove implements IMove {
 
     private final String rawMove;
     private final boolean placement;
+    private final boolean pass;
 
     public EscampeMove(String move) {
         this.rawMove = move;
         this.placement = move.length() > 5; // placement si > 5 (ex: 17 caractères)
+        this.pass = move.equals("E");
     }
 
     public boolean isPlacement() {
         return placement;
+    }
+
+    public boolean isPass() {
+        return pass;
     }
 
     public int getFromIndex() {
