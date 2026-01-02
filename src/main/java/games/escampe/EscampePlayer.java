@@ -12,8 +12,8 @@ import java.util.Map;
 
 public class EscampePlayer implements IJoueur{
 
-    private static final String PLATEAU_FILE = ".\\src\\main\\java\\games\\escampe\\plateau.txt";
-    private static final String OPENINGS_FILE = ".\\src\\main\\java\\games\\escampe\\openings.txt";
+    public static final String PLATEAU_FILE = ".\\data\\plateau.txt";
+    private static final String OPENINGS_FILE = ".\\data\\openings.txt";
     private EscampeBoard board;
     private int myColour;
     private EscampeRole myRole;
@@ -70,6 +70,10 @@ public class EscampePlayer implements IJoueur{
             myRole = EscampeRole.BLACK;
         }
 
+        // ---- Nettoyer plateau avant de commencer ----
+        board.clearBoard(); // vide les bitboards
+        board.clearPlateauFile(PLATEAU_FILE); // vide plateau.txt
+
         // Donner le rôle adverse
         EscampeRole opponentRole = (myRole == EscampeRole.WHITE) ? EscampeRole.BLACK : EscampeRole.WHITE;
 
@@ -121,7 +125,7 @@ public class EscampePlayer implements IJoueur{
         EscampeMove bestMove = aiPlayer.bestMove(board);
 
         if (bestMove == null) {
-            return "PASSE";
+            return "E";
         }
 
         // Jouer le coup sur notre copie du plateau (avec playVoid qui est optimisée)
@@ -131,6 +135,7 @@ public class EscampePlayer implements IJoueur{
         board.saveToFile(PLATEAU_FILE);
 
         // Retourner le coup au format string
+        System.out.println("[DEBUG] Coup envoyé : " + bestMove);
         return bestMove.toString();
     }
 
