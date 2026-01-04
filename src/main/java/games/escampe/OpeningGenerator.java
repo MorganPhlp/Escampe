@@ -17,7 +17,7 @@ import java.util.Map;
  */
 public class OpeningGenerator {
 
-    private static final String OPENINGS_FILE = ".\\src\\main\\java\\games\\escampe\\openings.txt";
+    private static final String OPENINGS_FILE = ".\\data\\openings.txt";
     private static final int OPENING_DEPTH = 6; // Profondeur de recherche AlphaBeta
     private static final int TOP_N_OPENINGS = 20; // Nombre d'ouvertures Noires à calculer
 

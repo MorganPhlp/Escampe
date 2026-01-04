@@ -1,8 +1,13 @@
 package games.escampe;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+
 import iialib.games.model.IBoard;
 import iialib.games.model.Score;
 
@@ -121,7 +126,7 @@ public class EscampeBoard implements Partie1, IBoard<EscampeMove,EscampeRole,Esc
                     }
 
                     if(c == 'N' || c == 'B' || c == 'n' || c == 'b'){ // Un pion
-                        long mask = 1L << lineCounter * 6 + colCounter; // Créer un masque avec l'index
+                        long mask = 1L << (lineCounter * 6 + colCounter); // Créer un masque avec l'index
 
                         switch(c){ // Selon le caractère, on place la pièce correspondante
                             case 'B' : whiteUnicorn |= mask; break;
@@ -336,7 +341,7 @@ public class EscampeBoard implements Partie1, IBoard<EscampeMove,EscampeRole,Esc
         // ----------------- Placement initial -----------------
         if(myPieces == 0L){ // Si je n'ai pas encore placé mes pièces
             // Essayer de charger depuis openings.txt
-            try (BufferedReader br = new BufferedReader(new FileReader(".\\src\\main\\java\\games\\escampe\\openings.txt"))) {
+            try (BufferedReader br = new BufferedReader(new FileReader(".\\data\\openings.txt"))) {
                 String line;
                 while ((line = br.readLine()) != null) {
                     line = line.trim();
@@ -451,7 +456,7 @@ public class EscampeBoard implements Partie1, IBoard<EscampeMove,EscampeRole,Esc
         }
 
         this.nextMoveConstraint = getLisereType(to); // Met à jour la contrainte pour le prochain coup
-        System.out.print("Vous devez jouer un liseré : "+nextMoveConstraint+"\n");
+        //System.out.print("Vous devez jouer un liseré : "+nextMoveConstraint+"\n");
         this.switchTurn();
     }
 
@@ -462,6 +467,15 @@ public class EscampeBoard implements Partie1, IBoard<EscampeMove,EscampeRole,Esc
         if(blackUnicorn == 0L && blackPaladins != 0L) return true; // Blanc gagne (licorne noire capturée)
         if(whiteUnicorn == 0L && whitePaladins != 0L) return true; // Noir gagne (licorne blanche capturée)
         return false;
+    }
+
+    /** Vide complètement le fichier de plateau (utilisé en fin de partie) */
+    public void clearPlateauFile(String fileName) {
+        try (BufferedWriter bw = new BufferedWriter(new FileWriter(fileName))) {
+            // On n’écrit rien → fichier vide
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
     /** Retourne les scores des joueurs lorsque la partie est terminée.
@@ -609,21 +623,26 @@ public class EscampeBoard implements Partie1, IBoard<EscampeMove,EscampeRole,Esc
     private ArrayList<EscampeMove> generateAllPlacements(EscampeRole player) {
         ArrayList<EscampeMove> placements = new ArrayList<>();
 
-        // Déterminer les lignes autorisées selon le joueur
+        // Déterminer les lignes de l'adversaire
+        long opponent = (player == EscampeRole.WHITE)
+                        ? (blackUnicorn | blackPaladins)
+                        : (whiteUnicorn | whitePaladins);
+
         int[] rows;
-        if (player == EscampeRole.BLACK) {
-            rows = new int[]{0, 1}; // Lignes 1-2 (indices 0-1)
+        if (opponent == 0L) { 
+            // Plateau vide : lignes "classiques"
+            rows = (player == EscampeRole.BLACK) ? new int[]{0,1} : new int[]{4,5};
         } else {
-            rows = new int[]{4, 5}; // Lignes 5-6 (indices 4-5)
+            // Plateau non vide : placer sur la ligne en face de l'adversaire
+            boolean opponentIsTop = (opponent & 0xFFF) != 0; // lignes 1-2 occupées
+            rows = opponentIsTop ? new int[]{4,5} : new int[]{0,1};
         }
 
-        // Générer toutes les combinaisons de 6 positions parmi 12 cases (2 lignes x 6 colonnes)
-        // On place la Licorne sur chaque case possible, puis 5 Paladins sur les 11 restantes
+        // Générer toutes les combinaisons de 6 positions parmi les 12 cases autorisées
         for (int unicornRow : rows) {
             for (int unicornCol = 0; unicornCol < 6; unicornCol++) {
                 int unicornIndex = unicornRow * 6 + unicornCol;
 
-                // Générer toutes les combinaisons de 5 paladins parmi les 11 cases restantes
                 ArrayList<Integer> availableIndices = new ArrayList<>();
                 for (int row : rows) {
                     for (int col = 0; col < 6; col++) {
@@ -634,13 +653,13 @@ public class EscampeBoard implements Partie1, IBoard<EscampeMove,EscampeRole,Esc
                     }
                 }
 
-                // Générer les combinaisons de 5 paladins (C(11,5) = 462 combinaisons par position de licorne)
                 generateCombinations(availableIndices, 5, 0, new ArrayList<>(), placements, unicornIndex);
             }
         }
 
         return placements;
     }
+
 
     /**
      * Génère récursivement toutes les combinaisons de k éléments parmi la liste.
