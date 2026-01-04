@@ -54,21 +54,23 @@ public class EscampeHeuristics {
         // a) Danger direct : Paladins adverses pouvant m'atteindre
         score -= calculateThreatWithDistance(oppPaladins, myUniIdx, allPieces, true);
 
-        // b) Prudence Géographique : Empêcher la licorne d'aller au centre
+        // b) Prudence Géographique : Empêcher la licorne d'aller trop loin
         if (isWhite) {
-            if (myUniY > 1) score -= (myUniY * 400); // Malus si elle descend trop
+            if (myUniY > 1) score -= (myUniY * 80); // Malus si elle descend trop
         } else {
-            if (myUniY < 4) score -= ((5 - myUniY) * 400); // Malus si elle monte trop
+            if (myUniY < 4) score -= ((5 - myUniY) * 80); // Malus si elle monte trop
         }
 
-        // c) Garde rapprochée : Bonus pour les paladins adjacents (bloqueurs)
+        // c) Garde rapprochée : Bonus pour les paladins adjacents (bloqueurs, plafonné)
+        int guardCount = 0;
         temp = myPaladins;
         while (temp != 0) {
             int pIdx = Long.numberOfTrailingZeros(temp);
             int dist = Math.abs(myUniX - (pIdx % 6)) + Math.abs(myUniY - (pIdx / 6));
-            if (dist == 1) score += 250; // Bonus pour chaque garde du corps direct
+            if (dist == 1) guardCount++;
             temp &= (temp - 1);
         }
+        score += Math.min(guardCount * 120, 360); // Max 3 gardes = 360 points
 
         // --- 4) AGRESSIVITÉ (Attaque) ---
         // Menace sur la licorne adverse

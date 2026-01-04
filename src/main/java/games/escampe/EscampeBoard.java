@@ -16,16 +16,12 @@ public class EscampeBoard implements Partie1, IBoard<EscampeMove,EscampeRole,Esc
     // ------------ Constantes ------------
 
     // Masques pour les liserés (Bit 0 = case libre, Bit 1 = liseré)
-    // private static final long LISERE_1 = 0b100010_010100_001010_010001_101001_000100L; // 0b pour binaire et L pour long
-    // private static final long LISERE_2 = 0b011001_000001_100100_100100_000001_011001L;
-    // private static final long LISERE_3 = 0b000100_101010_010001_001010_010100_100010L;
-
-    private static final long LISERE_1 = (1L<<0) | (1L<<4) | (1L<<7) | (1L<<9) | (1L<<14) | (1L<<16) | (1L<<19) | (1L<<23) | (1L<<24) | (1L<<26) | (1L<<28) | (1L<<33);
+    private static final long LISERE_1 = (1L) | (1L<<4) | (1L<<7) | (1L<<9) | (1L<<14) | (1L<<16) | (1L<<19) | (1L<<23) | (1L<<24) | (1L<<26) | (1L<<28) | (1L<<33);
     private static final long LISERE_2 = (1L<<1) | (1L<<2) | (1L<<5) | (1L<<11) | (1L<<12) | (1L<<15) | (1L<<18) | (1L<<21) | (1L<<29) | (1L<<31) | (1L<<32) | (1L<<35);
     private static final long LISERE_3 = (1L<<3) | (1L<<6) | (1L<<8) | (1L<<10) | (1L<<13) | (1L<<17) | (1L<<20) | (1L<<22) | (1L<<25) | (1L<<27) | (1L<<30) | (1L<<34);
 
     private static final String[] COORD_CACHE = new String[36]; // Cache des coordonnées des cases pour éviter de les recalculer
-    private static final long[][][] PATH_CACHE = new long[36][36][]; // Cache des chemins entre chaque paire de cases (null si impossible)
+    static final long[][][] PATH_CACHE = new long[36][36][]; // Cache des chemins entre chaque paire de cases (null si impossible)
 
     // ------------ Variables d'etat ------------
 
@@ -318,11 +314,7 @@ public class EscampeBoard implements Partie1, IBoard<EscampeMove,EscampeRole,Esc
 
         if(((opponentPaladins | opponentUnicorn) & toMask) != 0) { // Pièce adverse
             boolean targetIsUnicorn = (opponentUnicorn & toMask) != 0;
-            if (isPaladin && targetIsUnicorn) {
-                return true; // Le paladin peut capturer la licorne
-            } else {
-                return false; // Sinon interdit
-            }
+            return isPaladin && targetIsUnicorn; // Retourne si le paladin peut capturer la licorne
         }
 
         return true;
@@ -465,8 +457,7 @@ public class EscampeBoard implements Partie1, IBoard<EscampeMove,EscampeRole,Esc
     @Override
     public boolean isGameOver() {
         if(blackUnicorn == 0L && blackPaladins != 0L) return true; // Blanc gagne (licorne noire capturée)
-        if(whiteUnicorn == 0L && whitePaladins != 0L) return true; // Noir gagne (licorne blanche capturée)
-        return false;
+        return whiteUnicorn == 0L && whitePaladins != 0L; // Noir gagne (licorne blanche capturée)
     }
 
     /** Vide complètement le fichier de plateau (utilisé en fin de partie) */
@@ -624,19 +615,7 @@ public class EscampeBoard implements Partie1, IBoard<EscampeMove,EscampeRole,Esc
         ArrayList<EscampeMove> placements = new ArrayList<>();
 
         // Déterminer les lignes de l'adversaire
-        long opponent = (player == EscampeRole.WHITE)
-                        ? (blackUnicorn | blackPaladins)
-                        : (whiteUnicorn | whitePaladins);
-
-        int[] rows;
-        if (opponent == 0L) { 
-            // Plateau vide : lignes "classiques"
-            rows = (player == EscampeRole.BLACK) ? new int[]{0,1} : new int[]{4,5};
-        } else {
-            // Plateau non vide : placer sur la ligne en face de l'adversaire
-            boolean opponentIsTop = (opponent & 0xFFF) != 0; // lignes 1-2 occupées
-            rows = opponentIsTop ? new int[]{4,5} : new int[]{0,1};
-        }
+        int[] rows = getRows(player);
 
         // Générer toutes les combinaisons de 6 positions parmi les 12 cases autorisées
         for (int unicornRow : rows) {
@@ -658,6 +637,23 @@ public class EscampeBoard implements Partie1, IBoard<EscampeMove,EscampeRole,Esc
         }
 
         return placements;
+    }
+
+    private int[] getRows(EscampeRole player) {
+        long opponent = (player == EscampeRole.WHITE)
+                        ? (blackUnicorn | blackPaladins)
+                        : (whiteUnicorn | whitePaladins);
+
+        int[] rows;
+        if (opponent == 0L) {
+            // Plateau vide : lignes "classiques"
+            rows = (player == EscampeRole.BLACK) ? new int[]{0,1} : new int[]{4,5};
+        } else {
+            // Plateau non vide : placer sur la ligne en face de l'adversaire
+            boolean opponentIsTop = (opponent & 0xFFF) != 0; // lignes 1-2 occupées
+            rows = opponentIsTop ? new int[]{4,5} : new int[]{0,1};
+        }
+        return rows;
     }
 
 
