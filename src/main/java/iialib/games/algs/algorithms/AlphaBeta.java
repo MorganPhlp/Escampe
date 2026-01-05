@@ -62,7 +62,7 @@ public class AlphaBeta<Move extends IMove, Role extends IRole, Board extends IBo
 
     @Override
     public Move bestMove(Board board, Role playerRole) {
-        System.out.println("[AlphaBeta" + (useNegamax ? "-Negamax" : "") + "]");
+        // System.out.println("[AlphaBeta" + (useNegamax ? "-Negamax" : "") + "]");
 
         // Reset statistics
         nbNodes = 0;

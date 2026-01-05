@@ -82,9 +82,9 @@ public class EscampePlayer implements IJoueur{
         // Choisir l'heuristique appropriée selon ma couleur
         GameAlgorithm<EscampeMove, EscampeRole, EscampeBoard> algorithm;
         if (myRole == EscampeRole.WHITE) {
-            algorithm = new AlphaBeta<>(myRole, opponentRole, EscampeHeuristics.hWhite, 8);
+            algorithm = new AlphaBeta<>(myRole, opponentRole, EscampeHeuristics.hWhite, 4);
         } else {
-            algorithm = new AlphaBeta<>(myRole, opponentRole, EscampeHeuristics.hBlack, 8);
+            algorithm = new AlphaBeta<>(myRole, opponentRole, EscampeHeuristics.hBlack, 4);
         }
 
         // Initialiser le joueur IA avec l'algorithme choisi
@@ -178,7 +178,7 @@ public class EscampePlayer implements IJoueur{
     }
 
     /**
-     * Trouve le meilleur placement initial en utilisant une évaluation heuristique rapide
+     * Trouve le meilleur placement initial en utilisant AlphaBeta avec une basse profondeur
      */
     private String findBestPlacementWithAlphaBeta() {
         // Générer tous les placements possibles pour les Blancs
@@ -188,20 +188,35 @@ public class EscampePlayer implements IJoueur{
             return null;
         }
 
-        // Évaluer chaque placement possible et garder le meilleur
+        // Évaluer chaque placement possible avec AlphaBeta et garder le meilleur
         EscampeMove bestPlacement = null;
         int bestScore = Integer.MIN_VALUE;
+
+        System.out.println("  → Évaluation de " + possiblePlacements.size() + " placements avec AlphaBeta...");
 
         for (EscampeMove placement : possiblePlacements) {
             EscampeBoard testBoard = new EscampeBoard(board);
             testBoard.playVoid(placement, myRole);
 
-            // Évaluer la position avec l'heuristique
+            // Utiliser l'aiPlayer existant pour trouver le meilleur coup après ce placement
+            EscampeMove bestNextMove = aiPlayer.bestMove(testBoard);
+
+            // Évaluer la position résultante
             int score;
-            if (myRole == EscampeRole.WHITE) {
-                score = EscampeHeuristics.hWhite.eval(testBoard, myRole);
+            if (bestNextMove != null && !bestNextMove.isPass()) {
+                EscampeBoard afterMove = testBoard.play(bestNextMove, myRole);
+                if (myRole == EscampeRole.WHITE) {
+                    score = EscampeHeuristics.hWhite.eval(afterMove, myRole);
+                } else {
+                    score = EscampeHeuristics.hBlack.eval(afterMove, myRole);
+                }
             } else {
-                score = EscampeHeuristics.hBlack.eval(testBoard, myRole);
+                // Si pas de coup possible, évaluer directement
+                if (myRole == EscampeRole.WHITE) {
+                    score = EscampeHeuristics.hWhite.eval(testBoard, myRole);
+                } else {
+                    score = EscampeHeuristics.hBlack.eval(testBoard, myRole);
+                }
             }
 
             if (score > bestScore) {
@@ -210,6 +225,7 @@ public class EscampePlayer implements IJoueur{
             }
         }
 
+        System.out.println("  → Meilleur placement trouvé avec score: " + bestScore);
         return bestPlacement != null ? bestPlacement.toString() : null;
     }
 
@@ -223,16 +239,17 @@ public class EscampePlayer implements IJoueur{
         int startRow = (role == EscampeRole.BLACK) ? 0 : 4;
         int endRow = (role == EscampeRole.BLACK) ? 1 : 5;
 
-        // Générer des placements variés (échantillonnage intelligent)
-        // Pour ne pas prendre trop de temps, on génère seulement quelques placements stratégiques
+        // Générer plusieurs placements stratégiques variés
+        // Important: diversifier les liserés pour ne pas être bloqué
 
-        // Placement symétrique sur 2 lignes
+        // Pattern 1: Distribution équilibrée sur les deux lignes
         placements.add(new EscampeMove(generatePlacementString(startRow, endRow, 0)));
-        placements.add(new EscampeMove(generatePlacementString(startRow, endRow, 1)));
-        placements.add(new EscampeMove(generatePlacementString(startRow, endRow, 2)));
 
-        // On peut ajouter plus de variantes ici si nécessaire
-        // Pour l'instant, 3 placements différents suffisent pour un calcul rapide
+        // Pattern 2: Mix entre les deux lignes - variant 1
+        placements.add(new EscampeMove(generatePlacementString(startRow, endRow, 1)));
+
+        // Pattern 3: Mix entre les deux lignes - variant 2
+        placements.add(new EscampeMove(generatePlacementString(startRow, endRow, 2)));
 
         return placements;
     }
@@ -246,16 +263,16 @@ public class EscampePlayer implements IJoueur{
 
         // Différents patterns de placement
         switch (pattern) {
-            case 0: // Toutes les pièces sur la première ligne
-                positions = new int[]{row1*6, row1*6+1, row1*6+2, row1*6+3, row1*6+4, row1*6+5};
-                break;
-            case 1: // Mix entre les deux lignes
+            case 0: // Mix équilibré 3-3
                 positions = new int[]{row1*6, row1*6+1, row1*6+2, row2*6+3, row2*6+4, row2*6+5};
                 break;
-            case 2: // Autre mix
-                positions = new int[]{row1*6+1, row1*6+2, row2*6, row2*6+1, row2*6+2, row2*6+4};
+            case 1: // Mix 4-2 (majorité row1)
+                positions = new int[]{row1*6, row1*6+1, row1*6+3, row1*6+4, row2*6+2, row2*6+5};
                 break;
-            default:
+            case 2: // Mix 2-4 (majorité row2)
+                positions = new int[]{row1*6+1, row1*6+4, row2*6, row2*6+2, row2*6+3, row2*6+5};
+                break;
+            default: // Toutes sur row1
                 positions = new int[]{row1*6, row1*6+1, row1*6+2, row1*6+3, row1*6+4, row1*6+5};
         }
 

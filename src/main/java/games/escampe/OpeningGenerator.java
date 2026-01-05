@@ -7,8 +7,10 @@ import java.io.BufferedWriter;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 /**
  * Générateur d'ouvertures pour le jeu Escampe.
@@ -18,12 +20,19 @@ import java.util.Map;
 public class OpeningGenerator {
 
     private static final String OPENINGS_FILE = ".\\data\\openings.txt";
-    private static final int OPENING_DEPTH = 4; // Profondeur AlphaBeta (4=1-2h, 5=3-5h, 6=6-24h)
+
+    // Paramètres de performance optimisés avec parallélisation
+    private static final int NUM_THREADS = Runtime.getRuntime().availableProcessors(); // Utiliser tous les cœurs CPU
+    private static final int QUICK_FILTER_DEPTH = 2; // Profondeur pour le filtrage rapide
+    private static final int FINAL_DEPTH = 4; // Profondeur finale pour les meilleurs candidats
+    private static final int INITIAL_CANDIDATES = 100; // Nombre de candidats après filtrage rapide
     private static final int TOP_N_OPENINGS = 5; // Nombre d'ouvertures Noires à calculer
-    private static final int TOP_WHITE_RESPONSES = 10; // Nombre de réponses Blanches à calculer par ouverture Noire
+    private static final int TOP_WHITE_RESPONSES = 2; // Nombre de réponses Blanches à calculer par ouverture Noire
+    private static final int WHITE_SAMPLE_SIZE = 200; // Nombre de placements blancs à échantillonner
 
     public static void main(String[] args) {
-        System.out.println("=== Générateur d'Ouvertures Escampe ===\n");
+        System.out.println("=== Générateur d'Ouvertures Escampe (Parallélisé) ===");
+        System.out.println("Nombre de threads : " + NUM_THREADS + " (cœurs CPU disponibles)\n");
 
         OpeningGenerator generator = new OpeningGenerator();
         generator.generateOpenings();
@@ -38,20 +47,19 @@ public class OpeningGenerator {
     public void generateOpenings() {
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(OPENINGS_FILE))) {
             writer.write("% Fichier d'ouvertures pour le jeu Escampe\n");
-            writer.write("% Généré automatiquement par OpeningGenerator avec AlphaBeta exhaustif\n");
+            writer.write("% Généré automatiquement par OpeningGenerator avec AlphaBeta\n");
             writer.write("% Format: BLACK:placement ou WHITE:placementNoir:réponse\n");
-            writer.write("% NOTE: Les NOIRS jouent en PREMIER\n");
-            writer.write("% Profondeur AlphaBeta: " + OPENING_DEPTH + "\n");
-            writer.write("% Recherche exhaustive minimax\n");
+            writer.write("% Profondeur AlphaBeta: " + FINAL_DEPTH + " (filtrage: " + QUICK_FILTER_DEPTH + ")\n");
             writer.write("%\n\n");
 
             // 1. Calculer les TOP_N meilleures ouvertures pour les Noirs (avec recherche exhaustive)
-            System.out.println("Calcul des " + TOP_N_OPENINGS + " meilleures ouvertures NOIRES (profondeur " + OPENING_DEPTH + ")...");
+            System.out.println("Calcul des " + TOP_N_OPENINGS + " meilleures ouvertures NOIRES...");
+            System.out.println("  Phase 1: Filtrage rapide à profondeur " + QUICK_FILTER_DEPTH);
+            System.out.println("  Phase 2: Évaluation finale à profondeur " + FINAL_DEPTH);
             ArrayList<String> topBlackOpenings = findTopBlackOpenings();
 
             writer.write("% ====================================\n");
             writer.write("% Meilleures ouvertures pour les Noirs (premier joueur)\n");
-            writer.write("% Évaluées avec recherche minimax exhaustive\n");
             writer.write("% ====================================\n\n");
 
             for (String opening : topBlackOpenings) {
@@ -60,10 +68,9 @@ public class OpeningGenerator {
             System.out.println("\n✓ " + topBlackOpenings.size() + " meilleures ouvertures Noires calculées");
 
             // 2. Calculer les meilleures réponses Blanches pour chaque ouverture Noire
-            System.out.println("\nCalcul des meilleures réponses BLANCHES (profondeur " + OPENING_DEPTH + ")...");
+            System.out.println("\nCalcul des meilleures réponses BLANCHES (profondeur " + FINAL_DEPTH + ")...");
             writer.write("\n% ====================================\n");
             writer.write("% Meilleures réponses Blanches\n");
-            writer.write("% Format: WHITE:ouvertureNoire:réponseBlanche\n");
             writer.write("% ====================================\n\n");
 
             int totalResponses = 0;
@@ -85,33 +92,61 @@ public class OpeningGenerator {
 
     /**
      * Génère tous les placements initiaux possibles pour un joueur.
-     * Un placement initial consiste en 6 pions (1 licorne + 5 paladins) sur les 2 premières lignes.
-     * Pour les Noirs: lignes 0 et 1 (indices 0-11)
-     * Pour les Blancs: lignes 4 et 5 (indices 24-35)
+     * Un placement initial consiste en 6 pions (1 licorne + 5 paladins) sur les deux premières lignes.
+     * Pour les Noirs : lignes 0 et 1 ou 4 et 5 (indices 0-11 ou 24-35)
+     * Pour les Blancs : lignes 4 et 5 ou 0 et 1 suivant ce qu'aura choisi l'adversaire (indices 0-11 ou 24-35).
+     * Cela représente environ 11000 placements possibles pour les Noirs et 5500 pour les Blancs.
+     *
+     * @param isBlack true pour les Noirs, false pour les Blancs
+     * @param opponentChoiceIsTop true si l'adversaire a choisi le haut (lignes 0 et 1) pour lui-même, false sinon
+     * @return liste de tous les placements possibles (format "A1/B2/C1/D2/E1/F2") avec le premier étant la licorne
      */
-    private ArrayList<String> generateAllInitialPlacements(boolean isBlack) {
+    private ArrayList<String> generateAllInitialPlacements(boolean isBlack, boolean opponentChoiceIsTop) {
         ArrayList<String> allPlacements = new ArrayList<>();
 
         // Définir les cases disponibles selon le rôle
         int[] availableCells;
+        int[] availableCellsPart2 = new int[0];
         if (isBlack) {
             // Lignes 1 et 2 pour les Noirs (indices 0-11)
             availableCells = new int[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+            availableCellsPart2 = new int[]{24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35};
         } else {
             // Lignes 5 et 6 pour les Blancs (indices 24-35)
-            availableCells = new int[]{24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35};
+            if(!opponentChoiceIsTop) {
+                availableCells = new int[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+            } else {
+                availableCells = new int[]{24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35};
+            }
         }
 
         // Générer toutes les combinaisons de 6 positions parmi 12 possibles
         generateCombinations(availableCells, 0, new int[6], 0, allPlacements);
 
+        if(isBlack) {
+            // Ajouter aussi les placements sur les lignes 5 et 6 pour les Noirs
+            ArrayList<String> secondHalfPlacements = new ArrayList<>();
+            generateCombinations(availableCellsPart2, 0, new int[6], 0, secondHalfPlacements);
+            allPlacements.addAll(secondHalfPlacements);
+        }
+
         return allPlacements;
     }
 
     /**
-     * Génère récursivement toutes les combinaisons de 6 positions.
+     * Génère récursivement toutes les combinaisons de six positions pour le placement.
+     * La première position (licorne) est ordonnée, mais les cinq autres sont sans ordre.
+     *
+     * @param cells tableau des indices de cases disponibles
+     * @param startIdx index de départ pour la combinaison
+     * @param current tableau temporaire pour stocker la combinaison courante
+     * @param currentSize taille actuelle de la combinaison
+     * @param result liste pour stocker les combinaisons générées
      */
     private void generateCombinations(int[] cells, int startIdx, int[] current, int currentSize, ArrayList<String> result) {
+        int n = cells.length;
+        if (n < 6) return;
+
         if (currentSize == 6) {
             // Convertir les indices en format "A1/B2/C1/D2/E1/F2"
             StringBuilder sb = new StringBuilder();
@@ -126,7 +161,19 @@ public class OpeningGenerator {
             return;
         }
 
-        for (int i = startIdx; i < cells.length; i++) {
+        // Si on choisit la première position (licorne)
+        if (currentSize == 0) {
+            for (int cell : cells) {
+                current[0] = cell;
+                // Générer toutes les combinaisons (sans ordre) des 5 restantes
+                generateCombinations(cells, 0, current, 1, result);
+            }
+            return;
+        }
+
+        // Pour les 5 positions suivantes : combinaisons sans ordre, en ignorant la case de la licorne
+        for (int i = startIdx; i < n; i++) {
+            if (cells[i] == current[0]) continue; // ne pas réutiliser la licorne
             current[currentSize] = cells[i];
             generateCombinations(cells, i + 1, current, currentSize + 1, result);
         }
@@ -134,137 +181,227 @@ public class OpeningGenerator {
 
     /**
      * Trouve les TOP_N meilleures ouvertures pour les Noirs en utilisant AlphaBeta.
+     * Version PARALLÉLISÉE pour exploiter tous les cœurs CPU disponibles.
      * Les Noirs jouent en premier sur un plateau vide (sans adversaire).
-     * Pour chaque placement Noir, on évalue contre TOUS les placements Blancs possibles
-     * et on utilise AlphaBeta pour obtenir un score robuste.
-     *
-     * Cette méthode est exhaustive et peut prendre beaucoup de temps (~2h).
+     * Pour chaque placement Noir, on évalue contre un échantillon de placements Blancs.
+     * On utilise une approche en deux phases pour optimiser les performances :
+     * Phase 1: Filtrage rapide avec profondeur faible
+     * Phase 2: Évaluation approfondie des meilleurs candidats
      *
      * @return liste des x meilleures ouvertures Noires
      */
     private ArrayList<String> findTopBlackOpenings() {
-        System.out.println("\n=== RECHERCHE EXHAUSTIVE DES MEILLEURES OUVERTURES NOIRES ===\n");
+        System.out.println("\n=== RECHERCHE PARALLÉLISÉE DES MEILLEURES OUVERTURES NOIRES ===\n");
 
         // Générer tous les placements possibles pour les Noirs et les Blancs
-        ArrayList<String> allBlackPlacements = generateAllInitialPlacements(true);
-        ArrayList<String> allWhitePlacements = generateAllInitialPlacements(false);
+        ArrayList<String> allBlackPlacements = generateAllInitialPlacements(true, false);
+        ArrayList<String> allWhitePlacementsTop = generateAllInitialPlacements(false, false);
+        ArrayList<String> allWhitePlacementsBottom = generateAllInitialPlacements(false, true);
 
-        System.out.println("  " + allBlackPlacements.size() + " placements Noirs × " +
-                          allWhitePlacements.size() + " placements Blancs = " +
-                          (allBlackPlacements.size() * allWhitePlacements.size()) + " positions à évaluer");
-        System.out.println("  Profondeur AlphaBeta: " + OPENING_DEPTH);
-        System.out.println("  Estimation: 1-2h de calcul\n");
+        System.out.println("  Total placements Noirs: " + allBlackPlacements.size());
+        System.out.println("  Total placements Blancs (top): " + allWhitePlacementsTop.size());
+        System.out.println("  Total placements Blancs (bottom): " + allWhitePlacementsBottom.size());
+        System.out.println("  Threads parallèles: " + NUM_THREADS);
+        System.out.println();
 
-        // Évaluer chaque placement Noir avec une approche minimax
-        Map<String, Integer> placementScores = new HashMap<>();
-        int totalPositions = allBlackPlacements.size();
-        int positionCount = 0;
-        long startTime = System.currentTimeMillis();
-        long totalEvaluations = 0; // Compteur du nombre total d'évaluations
+        // PHASE 1: Filtrage rapide PARALLÉLISÉ
+        System.out.println("=== PHASE 1: Filtrage rapide parallélisé (profondeur " + QUICK_FILTER_DEPTH + ") ===\n");
+        final long startTimePhase1 = System.currentTimeMillis();
 
-        for (String blackPlacementStr : allBlackPlacements) {
-            positionCount++;
+        AtomicInteger progressCounter = new AtomicInteger(0);
+        int totalPlacements = allBlackPlacements.size();
 
-            // 1. Placer les Noirs
-            EscampeBoard boardWithBlack = new EscampeBoard();
-            boardWithBlack.clearBoard();
-            EscampeMove blackMove = new EscampeMove(blackPlacementStr);
-            boardWithBlack.playVoid(blackMove, EscampeRole.BLACK);
+        // Utiliser un Stream parallèle pour évaluer tous les placements en parallèle
+        Map<String, Integer> quickScores = allBlackPlacements.parallelStream()
+            .collect(Collectors.toConcurrentMap(
+                blackPlacement -> blackPlacement,
+                blackPlacement -> {
+                    int score = quickEvaluateBlackPlacement(blackPlacement,
+                                                            allWhitePlacementsTop,
+                                                            allWhitePlacementsBottom);
 
-            // 2. Pour ce placement Noir, trouver le PIRE cas (meilleur placement Blanc)
-            // C'est une approche minimax: les Noirs maximisent, les Blancs minimisent le score Noir
-            int worstCaseScore = Integer.MAX_VALUE; // Pire cas du point de vue des Noirs
-            int whiteCount = 0; // Compteur pour ce placement Noir
+                    // Afficher la progression de manière thread-safe
+                    int current = progressCounter.incrementAndGet();
+                    if (current % 500 == 0 || current == totalPlacements) {
+                        synchronized (System.out) {
+                            long elapsed = System.currentTimeMillis() - startTimePhase1;
+                            long remaining = (elapsed * (totalPlacements - current)) / current;
+                            System.out.printf("  [%d/%d] %.1f%% | Temps restant: %s\n",
+                                current, totalPlacements, (100.0 * current / totalPlacements), formatTime(remaining));
+                        }
+                    }
 
-            for (String whitePlacementStr : allWhitePlacements) {
-                whiteCount++;
-                totalEvaluations++;
-
-                EscampeBoard fullBoard = new EscampeBoard(boardWithBlack);
-                EscampeMove whiteMove = new EscampeMove(whitePlacementStr);
-                fullBoard.playVoid(whiteMove, EscampeRole.WHITE);
-
-                // 3. Évaluer cette position complète avec AlphaBeta
-                // Les Noirs commencent à jouer (après les placements)
-                fullBoard.switchTurn(); // S'assurer que c'est au tour des Blancs (ils jouent en premier après placement)
-
-                // Évaluer la position en faisant jouer AlphaBeta
-                // On simule quelques coups pour obtenir une évaluation robuste
-                int score = evaluatePositionWithAlphaBeta(fullBoard, EscampeRole.BLACK);
-
-                // Minimax: les Blancs choisissent le placement qui minimise le score des Noirs
-                if (score < worstCaseScore) {
-                    worstCaseScore = score;
+                    return score;
                 }
-            }
+            ));
 
-            // Le score de ce placement Noir est son score dans le pire cas
-            placementScores.put(blackPlacementStr, worstCaseScore);
+        // Trier et garder les INITIAL_CANDIDATES meilleurs
+        ArrayList<Map.Entry<String, Integer>> sortedQuick = new ArrayList<>(quickScores.entrySet());
+        sortedQuick.sort((e1, e2) -> e2.getValue().compareTo(e1.getValue()));
 
-            // Affichage de la progression
-            if (positionCount % 10 == 0 || positionCount == totalPositions) {
-                long elapsed = System.currentTimeMillis() - startTime;
-                long avgTimePerPosition = elapsed / positionCount;
-                long remainingTime = avgTimePerPosition * (totalPositions - positionCount);
-
-                System.out.printf("  [%d/%d] %s → score minimax: %d (%d positions Blanches évaluées)\n",
-                    positionCount, totalPositions, blackPlacementStr, worstCaseScore, whiteCount);
-                System.out.printf("           Total: %d évaluations | Temps restant: %s\n",
-                    totalEvaluations, formatTime(remainingTime));
-            }
+        ArrayList<String> candidates = new ArrayList<>();
+        for (int i = 0; i < Math.min(INITIAL_CANDIDATES, sortedQuick.size()); i++) {
+            candidates.add(sortedQuick.get(i).getKey());
         }
 
-        System.out.println("\n  ✓ Tous les placements Noirs évalués !");
-        System.out.println("  Total d'évaluations: " + totalEvaluations + " positions");
-        System.out.println("  Temps total: " + formatTime(System.currentTimeMillis() - startTime));
+        System.out.println("\n  ✓ Phase 1 terminée en " + formatTime(System.currentTimeMillis() - startTimePhase1));
+        System.out.println("  → " + candidates.size() + " candidats sélectionnés\n");
+
+        // PHASE 2: Évaluation approfondie PARALLÉLISÉE des meilleurs candidats
+        System.out.println("=== PHASE 2: Évaluation approfondie parallélisée (profondeur " + FINAL_DEPTH + ") ===\n");
+        final long startTimePhase2 = System.currentTimeMillis();
+        progressCounter.set(0);
+
+        // Utiliser un Stream parallèle pour la phase 2
+        Map<String, Integer> finalScores = candidates.parallelStream()
+            .collect(Collectors.toConcurrentMap(
+                blackPlacement -> blackPlacement,
+                blackPlacement -> {
+                    int score = deepEvaluateBlackPlacement(blackPlacement,
+                                                           allWhitePlacementsTop,
+                                                           allWhitePlacementsBottom);
+
+                    int current = progressCounter.incrementAndGet();
+                    synchronized (System.out) {
+                        System.out.printf("  [%d/%d] %s → score: %d\n",
+                            current, candidates.size(), blackPlacement, score);
+                    }
+
+                    return score;
+                }
+            ));
+
+        System.out.println("\n  ✓ Phase 2 terminée en " + formatTime(System.currentTimeMillis() - startTimePhase2));
 
         // Trier et retourner les TOP_N meilleures
-        ArrayList<Map.Entry<String, Integer>> sortedEntries = new ArrayList<>(placementScores.entrySet());
-        sortedEntries.sort((e1, e2) -> e2.getValue().compareTo(e1.getValue())); // Tri décroissant
+        ArrayList<Map.Entry<String, Integer>> sortedFinal = new ArrayList<>(finalScores.entrySet());
+        sortedFinal.sort((e1, e2) -> e2.getValue().compareTo(e1.getValue()));
 
         System.out.println("\n=== TOP " + TOP_N_OPENINGS + " MEILLEURES OUVERTURES NOIRES ===\n");
         ArrayList<String> topOpenings = new ArrayList<>();
-        for (int i = 0; i < Math.min(TOP_N_OPENINGS, sortedEntries.size()); i++) {
-            topOpenings.add(sortedEntries.get(i).getKey());
-            System.out.printf("  #%d: %s → score minimax: %d\n",
-                i+1, sortedEntries.get(i).getKey(), sortedEntries.get(i).getValue());
+        for (int i = 0; i < Math.min(TOP_N_OPENINGS, sortedFinal.size()); i++) {
+            topOpenings.add(sortedFinal.get(i).getKey());
+            System.out.printf("  #%d: %s → score: %d\n",
+                i+1, sortedFinal.get(i).getKey(), sortedFinal.get(i).getValue());
         }
 
         return topOpenings;
     }
 
     /**
-     * Évalue une position avec AlphaBeta en simulant des coups à la profondeur OPENING_DEPTH
-     * Cette méthode utilise VRAIMENT AlphaBeta pour une évaluation robuste.
+     * Évaluation rapide d'un placement noir (Phase 1)
+     * Utilise une heuristique simple et teste contre un échantillon limité de placements blancs
      */
-    private int evaluatePositionWithAlphaBeta(EscampeBoard board, EscampeRole role) {
+    private int quickEvaluateBlackPlacement(String blackPlacement,
+                                            ArrayList<String> whitePlacementsTop,
+                                            ArrayList<String> whitePlacementsBottom) {
+        // Déterminer si les noirs sont en haut ou en bas
+        boolean blackIsTop = (blackPlacement.charAt(1) == '1' || blackPlacement.charAt(1) == '2');
+        ArrayList<String> relevantWhitePlacements = blackIsTop ? whitePlacementsBottom : whitePlacementsTop;
+
+        // Échantillonner seulement quelques placements blancs (tous les N-ièmes)
+        int sampleStep = Math.max(1, relevantWhitePlacements.size() / 20); // ~20 échantillons
+        int worstScore = Integer.MAX_VALUE;
+
+        EscampeBoard boardWithBlack = new EscampeBoard();
+        boardWithBlack.clearBoard();
+        EscampeMove blackMove = new EscampeMove(blackPlacement);
+        boardWithBlack.playVoid(blackMove, EscampeRole.BLACK);
+
+        for (int i = 0; i < relevantWhitePlacements.size(); i += sampleStep) {
+            String whitePlacement = relevantWhitePlacements.get(i);
+
+            EscampeBoard fullBoard = new EscampeBoard(boardWithBlack);
+            EscampeMove whiteMove = new EscampeMove(whitePlacement);
+            fullBoard.playVoid(whiteMove, EscampeRole.WHITE);
+            fullBoard.switchTurn();
+
+            // Évaluation rapide à profondeur 1
+            int score = evaluatePositionWithAlphaBeta(fullBoard, EscampeRole.BLACK, QUICK_FILTER_DEPTH);
+            worstScore = Math.min(worstScore, score);
+        }
+
+        return worstScore;
+    }
+
+    /**
+     * Évaluation approfondie d'un placement noir (Phase 2)
+     * Teste contre un échantillon plus large avec une profondeur plus grande
+     */
+    private int deepEvaluateBlackPlacement(String blackPlacement,
+                                           ArrayList<String> whitePlacementsTop,
+                                           ArrayList<String> whitePlacementsBottom) {
+        boolean blackIsTop = (blackPlacement.charAt(1) == '1' || blackPlacement.charAt(1) == '2');
+        ArrayList<String> relevantWhitePlacements = blackIsTop ? whitePlacementsBottom : whitePlacementsTop;
+
+        // Échantillonner WHITE_SAMPLE_SIZE placements blancs uniformément
+        int sampleStep = Math.max(1, relevantWhitePlacements.size() / WHITE_SAMPLE_SIZE);
+        int worstScore = Integer.MAX_VALUE;
+
+        EscampeBoard boardWithBlack = new EscampeBoard();
+        boardWithBlack.clearBoard();
+        EscampeMove blackMove = new EscampeMove(blackPlacement);
+        boardWithBlack.playVoid(blackMove, EscampeRole.BLACK);
+
+        for (int i = 0; i < relevantWhitePlacements.size(); i += sampleStep) {
+            String whitePlacement = relevantWhitePlacements.get(i);
+
+            EscampeBoard fullBoard = new EscampeBoard(boardWithBlack);
+            EscampeMove whiteMove = new EscampeMove(whitePlacement);
+            fullBoard.playVoid(whiteMove, EscampeRole.WHITE);
+            fullBoard.switchTurn();
+
+            // Évaluation approfondie à profondeur finale
+            int score = evaluatePositionWithAlphaBeta(fullBoard, EscampeRole.BLACK, FINAL_DEPTH);
+            worstScore = Math.min(worstScore, score);
+        }
+
+        return worstScore;
+    }
+
+    /**
+     * Évalue une position avec AlphaBeta en simulant des coups à la profondeur donnée
+     *
+     * @param board le plateau à évaluer
+     * @param role le rôle du joueur à évaluer (Noir ou Blanc)
+     * @param depth la profondeur de recherche AlphaBeta
+     * @return le score évalué pour le joueur donné
+     */
+    private int evaluatePositionWithAlphaBeta(EscampeBoard board, EscampeRole role, int depth) {
         // Créer une copie pour ne pas modifier le plateau original
         EscampeBoard testBoard = new EscampeBoard(board);
 
         // Créer l'algorithme AlphaBeta avec la profondeur configurée
+        var heuristic = (role == EscampeRole.BLACK) ? EscampeHeuristics.hBlack : EscampeHeuristics.hWhite;
+        var roleOpp = (role == EscampeRole.BLACK) ? EscampeRole.WHITE : EscampeRole.BLACK;
         AlphaBeta<EscampeMove, EscampeRole, EscampeBoard> alphabeta =
-            new AlphaBeta<>(EscampeRole.BLACK, EscampeRole.WHITE, EscampeHeuristics.hBlack, OPENING_DEPTH);
+                new AlphaBeta<>(role, roleOpp, heuristic, depth);
 
-        // Créer le joueur AI qui utilise AlphaBeta
-        AIPlayer<EscampeMove, EscampeRole, EscampeBoard> ai =
-            new AIPlayer<>(role, alphabeta);
+        // Créer le joueur IA qui utilise AlphaBeta
+        AIPlayer<EscampeMove, EscampeRole, EscampeBoard> ai = new AIPlayer<>(role, alphabeta);
 
-        // Lancer l'évaluation AlphaBeta (cela va explorer l'arbre de jeu en profondeur)
+        // Lancer l'évaluation AlphaBeta
         EscampeMove bestMove = ai.bestMove(testBoard);
 
         // Après l'appel à bestMove, on évalue la position résultante
-        // Si on peut jouer le meilleur coup, on évalue la position après ce coup
+        // Si on peut jouer le meilleur coup, on évalue la position après ce coup.
         if (bestMove != null && !bestMove.isPass()) {
             EscampeBoard afterMove = testBoard.play(bestMove, role);
-            return EscampeHeuristics.hBlack.eval(afterMove, role);
+            return heuristic.eval(afterMove, role);
+        }
+        else if (bestMove == null) {
+            System.out.println(" [Attention !] Aucun coup possible pour le rôle " + role + " lors de l'évaluation.");
         }
 
         // Sinon, évaluer la position actuelle
-        return EscampeHeuristics.hBlack.eval(testBoard, role);
+        return heuristic.eval(testBoard, role);
     }
 
     /**
      * Formate un temps en millisecondes en format lisible
+     *
+     * @param millis temps en millisecondes
+     * @return chaîne formatée (ex: "1h 23min", "45min 30s", "15s")
      */
     private String formatTime(long millis) {
         long seconds = millis / 1000;
@@ -282,7 +419,8 @@ public class OpeningGenerator {
 
     /**
      * Trouve les meilleures réponses Blanches pour une ouverture Noire donnée.
-     * Utilise AlphaBeta pour évaluer toutes les réponses possibles.
+     * Version PARALLÉLISÉE avec une approche en deux phases.
+     *
      * @param blackOpening le placement Noir (format "C1/A1/B2/D2/E1/F2")
      * @return les TOP_WHITE_RESPONSES meilleures réponses Blanches
      */
@@ -296,32 +434,67 @@ public class OpeningGenerator {
         boardWithBlack.playVoid(blackMove, EscampeRole.BLACK);
 
         // Générer tous les placements Blancs possibles
-        ArrayList<String> allWhitePlacements = generateAllInitialPlacements(false);
-        Map<String, Integer> whitePlacementScores = new HashMap<>();
+        boolean blackIsTop = (blackOpening.charAt(1) == '1' || blackOpening.charAt(1) == '2');
+        ArrayList<String> allWhitePlacements = generateAllInitialPlacements(false, blackIsTop);
 
-        // Évaluer chaque placement Blanc
-        for (String whitePlacementStr : allWhitePlacements) {
-            EscampeBoard fullBoard = new EscampeBoard(boardWithBlack);
-            EscampeMove whiteMove = new EscampeMove(whitePlacementStr);
-            fullBoard.playVoid(whiteMove, EscampeRole.WHITE);
+        System.out.println("    Phase 1: Filtrage rapide parallélisé sur " + allWhitePlacements.size() + " placements...");
 
-            // Évaluer du point de vue des Blancs
-            fullBoard.switchTurn(); // S'assurer que c'est au tour des Blancs
-            int score = EscampeHeuristics.hWhite.eval(fullBoard, EscampeRole.WHITE);
-
-            whitePlacementScores.put(whitePlacementStr, score);
+        // Phase 1: Filtrage rapide PARALLÉLISÉ
+        int sampleStep = Math.max(1, allWhitePlacements.size() / 300); // Échantillonner ~300 placements
+        ArrayList<String> sampledPlacements = new ArrayList<>();
+        for (int i = 0; i < allWhitePlacements.size(); i += sampleStep) {
+            sampledPlacements.add(allWhitePlacements.get(i));
         }
 
+        Map<String, Integer> quickScores = sampledPlacements.parallelStream()
+            .collect(Collectors.toConcurrentMap(
+                whitePlacement -> whitePlacement,
+                whitePlacement -> {
+                    EscampeBoard fullBoard = new EscampeBoard(boardWithBlack);
+                    EscampeMove whiteMove = new EscampeMove(whitePlacement);
+                    fullBoard.playVoid(whiteMove, EscampeRole.WHITE);
+                    fullBoard.switchTurn();
+
+                    return evaluatePositionWithAlphaBeta(fullBoard, EscampeRole.WHITE, QUICK_FILTER_DEPTH);
+                }
+            ));
+
+        // Sélectionner les meilleurs candidats
+        ArrayList<Map.Entry<String, Integer>> sortedQuick = new ArrayList<>(quickScores.entrySet());
+        sortedQuick.sort((e1, e2) -> e2.getValue().compareTo(e1.getValue()));
+
+        int candidatesCount = Math.min(30, sortedQuick.size()); // Garder top 30 pour phase 2
+        ArrayList<String> candidates = new ArrayList<>();
+        for (int i = 0; i < candidatesCount; i++) {
+            candidates.add(sortedQuick.get(i).getKey());
+        }
+
+        System.out.println("    Phase 2: Évaluation approfondie parallélisée de " + candidates.size() + " candidats...");
+
+        // Phase 2: Évaluation approfondie PARALLÉLISÉE
+        Map<String, Integer> finalScores = candidates.parallelStream()
+            .collect(Collectors.toConcurrentMap(
+                whitePlacement -> whitePlacement,
+                whitePlacement -> {
+                    EscampeBoard fullBoard = new EscampeBoard(boardWithBlack);
+                    EscampeMove whiteMove = new EscampeMove(whitePlacement);
+                    fullBoard.playVoid(whiteMove, EscampeRole.WHITE);
+                    fullBoard.switchTurn();
+
+                    return evaluatePositionWithAlphaBeta(fullBoard, EscampeRole.WHITE, FINAL_DEPTH);
+                }
+            ));
+
         // Trier par score décroissant (meilleur pour les Blancs)
-        ArrayList<Map.Entry<String, Integer>> sortedEntries = new ArrayList<>(whitePlacementScores.entrySet());
-        sortedEntries.sort((e1, e2) -> e2.getValue().compareTo(e1.getValue()));
+        ArrayList<Map.Entry<String, Integer>> sortedFinal = new ArrayList<>(finalScores.entrySet());
+        sortedFinal.sort((e1, e2) -> e2.getValue().compareTo(e1.getValue()));
 
         // Garder les TOP_WHITE_RESPONSES meilleures
         ArrayList<String> topResponses = new ArrayList<>();
-        for (int i = 0; i < Math.min(TOP_WHITE_RESPONSES, sortedEntries.size()); i++) {
-            topResponses.add(sortedEntries.get(i).getKey());
+        for (int i = 0; i < Math.min(TOP_WHITE_RESPONSES, sortedFinal.size()); i++) {
+            topResponses.add(sortedFinal.get(i).getKey());
             System.out.printf("    #%d: %s → score: %d\n",
-                i+1, sortedEntries.get(i).getKey(), sortedEntries.get(i).getValue());
+                i+1, sortedFinal.get(i).getKey(), sortedFinal.get(i).getValue());
         }
 
         return topResponses;

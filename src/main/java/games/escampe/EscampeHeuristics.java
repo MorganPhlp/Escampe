@@ -41,14 +41,29 @@ public class EscampeHeuristics {
 
         // --- 2) DIVERSITÉ DES LISERÉS ---
         int lisereMask = 0;
-        long temp = myPaladins;
+        int lisereCount = 0;
+        long temp = myPaladins | myUni; // paladins + licorne
         while (temp != 0) {
             int idx = Long.numberOfTrailingZeros(temp);
             int lisere = EscampeBoard.getLisereType(idx);
-            if (lisere > 0) lisereMask |= (1 << lisere);
+            if (lisere > 0) {
+                if ((lisereMask & (1 << lisere)) == 0) {
+                    lisereCount++;
+                }
+                lisereMask |= (1 << lisere);
+            }
             temp &= (temp - 1);
         }
-        score += 150 * Integer.bitCount(lisereMask);
+
+        // Bonus important pour avoir plusieurs liserés différents
+        score += 100 * lisereCount;
+
+        // Pénalité si on n'a qu'un seul liseré (= blocage facile par l'adversaire)
+        if (lisereCount == 1) {
+            score -= 2000; // Malus énorme pour vulnérabilité au blocage
+        } else if (lisereCount == 2) {
+            score -= 700; // Malus modéré, toujours vulnérable mais moins
+        }
 
         // --- 3) SÉCURITÉ DE MA LICORNE (Défense) ---
         // a) Danger direct : Paladins adverses pouvant m'atteindre
@@ -96,9 +111,9 @@ public class EscampeHeuristics {
                     }
                 }
                 if (minSteps != Integer.MAX_VALUE) {
-                    // Score très élevé (1000) pour une capture en 1 coup (minSteps 0, 1 ou 2 selon liseré)
+                    // Score très élevé (4000) pour une capture en 1 coup (minSteps 0, 1 ou 2 selon liseré)
                     // On utilise une valeur plancher pour que la capture soit toujours prioritaire
-                    int val = 1000 / (minSteps + 1);
+                    int val = 4000 / (minSteps + 1);
                     threatScore += val;
                 }
             }
